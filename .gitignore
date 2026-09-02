@@ -4,6 +4,10 @@ __pycache__/
 backend/smartpark.db
 backend/smartpark.db-journal
 
+**/.env
+**/.env.*
+!**/.env.example
+
 
 .DS_Store
 frontend/node_modules/
