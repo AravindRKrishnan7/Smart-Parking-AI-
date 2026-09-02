@@ -5,10 +5,16 @@ import {
   cancelReservation,
   fetchParkingSlots,
   fetchReservations,
+  fetchServiceCatalogue,
+  fetchServiceRequests,
   updateOccupancy,
+  updateServiceRequestStatus,
   type ParkingSlot,
   type PhysicalStatus,
   type Reservation,
+  type ServiceCatalogueItem,
+  type ServiceRequest,
+  type ServiceRequestStatus,
 } from "./api";
 
 interface DeveloperToolsProps {
@@ -24,12 +30,21 @@ interface Feedback {
 }
 
 const CURRENT_STATUSES = new Set(["ACTIVE", "IN_USE"]);
+const CURRENT_SERVICE_STATUSES = new Set(["REQUESTED", "ACCEPTED", "IN_PROGRESS"]);
 const STATUS_PRIORITY: Record<Reservation["status"], number> = {
   ACTIVE: 0,
   IN_USE: 1,
   COMPLETED: 2,
   CANCELLED: 3,
   EXPIRED: 4,
+};
+
+const SERVICE_STATUS_PRIORITY: Record<ServiceRequestStatus, number> = {
+  REQUESTED: 0,
+  ACCEPTED: 1,
+  IN_PROGRESS: 2,
+  COMPLETED: 3,
+  CANCELLED: 4,
 };
 
 function errorMessage(error: unknown): string {
@@ -98,6 +113,79 @@ function ReservationCard({
   );
 }
 
+function ServiceProviderCard({
+  request,
+  serviceName,
+  slotName,
+  busy,
+  onUpdate,
+}: {
+  request: ServiceRequest;
+  serviceName: string;
+  slotName: string;
+  busy: boolean;
+  onUpdate: (request: ServiceRequest, status: ServiceRequestStatus) => void;
+}) {
+  return (
+    <article className="rounded-xl border border-violet-200 bg-white p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-black text-slate-900">
+            #{request.id} · {serviceName}
+          </div>
+          <div className="mt-0.5 text-xs font-semibold text-slate-500">
+            {request.vehicle_number} · {slotName}
+          </div>
+        </div>
+        <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-black tracking-wide text-violet-700">
+          {request.status.replace(/_/g, " ")}
+        </span>
+      </div>
+
+      {request.status === "REQUESTED" && (
+        <button
+          type="button"
+          onClick={() => onUpdate(request, "ACCEPTED")}
+          disabled={busy}
+          className="mt-3 w-full rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "Updating…" : "Accept"}
+        </button>
+      )}
+      {request.status === "ACCEPTED" && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onUpdate(request, "IN_PROGRESS")}
+            disabled={busy}
+            className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Updating…" : "Start Service"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onUpdate(request, "CANCELLED")}
+            disabled={busy}
+            className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {request.status === "IN_PROGRESS" && (
+        <button
+          type="button"
+          onClick={() => onUpdate(request, "COMPLETED")}
+          disabled={busy}
+          className="mt-3 w-full rounded-lg bg-green-600 px-3 py-2 text-xs font-black text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "Updating…" : "Complete"}
+        </button>
+      )}
+    </article>
+  );
+}
+
 export default function DeveloperTools({
   slots,
   slotsLoading,
@@ -106,10 +194,14 @@ export default function DeveloperTools({
 }: DeveloperToolsProps) {
   const [open, setOpen] = useState(false);
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [serviceCatalogue, setServiceCatalogue] = useState<ServiceCatalogueItem[]>([]);
+  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [reservationsLoading, setReservationsLoading] = useState(false);
+  const [servicesLoading, setServicesLoading] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [serviceHistoryOpen, setServiceHistoryOpen] = useState(false);
 
   const loadReservations = useCallback(async () => {
     setReservationsLoading(true);
@@ -122,10 +214,25 @@ export default function DeveloperTools({
     }
   }, []);
 
+  const loadServices = useCallback(async () => {
+    setServicesLoading(true);
+    try {
+      const [nextCatalogue, nextRequests] = await Promise.all([
+        fetchServiceCatalogue(),
+        fetchServiceRequests(),
+      ]);
+      setServiceCatalogue(nextCatalogue);
+      setServiceRequests(nextRequests);
+      return nextRequests;
+    } finally {
+      setServicesLoading(false);
+    }
+  }, []);
+
   const refreshState = useCallback(async () => {
     setFeedback(null);
     try {
-      await Promise.all([refreshSlots(true), loadReservations()]);
+      await Promise.all([refreshSlots(true), loadReservations(), loadServices()]);
       setFeedback({ kind: "success", message: "Backend state refreshed." });
     } catch (error) {
       setFeedback({
@@ -133,7 +240,7 @@ export default function DeveloperTools({
         message: `Refresh failed: ${errorMessage(error)}`,
       });
     }
-  }, [loadReservations, refreshSlots]);
+  }, [loadReservations, loadServices, refreshSlots]);
 
   useEffect(() => {
     if (!open) return;
@@ -155,6 +262,25 @@ export default function DeveloperTools({
   const historicalReservations = sortedReservations.filter(
     (reservation) => !CURRENT_STATUSES.has(reservation.status),
   );
+  const sortedServiceRequests = useMemo(
+    () =>
+      [...serviceRequests].sort(
+        (left, right) =>
+          SERVICE_STATUS_PRIORITY[left.status] - SERVICE_STATUS_PRIORITY[right.status] ||
+          right.id - left.id,
+      ),
+    [serviceRequests],
+  );
+  const currentServiceRequests = sortedServiceRequests.filter((request) =>
+    CURRENT_SERVICE_STATUSES.has(request.status),
+  );
+  const historicalServiceRequests = sortedServiceRequests.filter(
+    (request) => !CURRENT_SERVICE_STATUSES.has(request.status),
+  );
+  const serviceNames = useMemo(
+    () => new Map(serviceCatalogue.map((service) => [service.service_type, service.name])),
+    [serviceCatalogue],
+  );
   const slotNames = useMemo(
     () => new Map(slots.map((slot) => [slot.id, slot.name])),
     [slots],
@@ -174,7 +300,7 @@ export default function DeveloperTools({
         physical_status: physicalStatus,
         source: slot.configured_source,
       });
-      await Promise.all([refreshSlots(true), loadReservations()]);
+      await Promise.all([refreshSlots(true), loadReservations(), loadServices()]);
       setFeedback({
         kind: "success",
         message:
@@ -196,10 +322,32 @@ export default function DeveloperTools({
     setFeedback(null);
     try {
       await cancelReservation(reservation.id);
-      await Promise.all([refreshSlots(true), loadReservations()]);
+      await Promise.all([refreshSlots(true), loadReservations(), loadServices()]);
       setFeedback({
         kind: "success",
         message: `Reservation #${reservation.id} cancelled.`,
+      });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setActionKey(null);
+    }
+  };
+
+  const updateProviderService = async (
+    request: ServiceRequest,
+    status: ServiceRequestStatus,
+  ) => {
+    const key = `service-${request.id}`;
+    if (actionKey) return;
+    setActionKey(key);
+    setFeedback(null);
+    try {
+      await updateServiceRequestStatus(request.id, status);
+      await loadServices();
+      setFeedback({
+        kind: "success",
+        message: `Service #${request.id} moved to ${status.replace(/_/g, " ")}.`,
       });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -220,6 +368,14 @@ export default function DeveloperTools({
     let step = "fetch current state";
 
     try {
+      let resetServices = await fetchServiceRequests();
+      for (const serviceRequest of resetServices.filter(
+        (item) => item.status === "REQUESTED" || item.status === "ACCEPTED",
+      )) {
+        step = `cancel ${serviceRequest.status} service #${serviceRequest.id}`;
+        await updateServiceRequestStatus(serviceRequest.id, "CANCELLED");
+      }
+
       let resetReservations = await fetchReservations();
       let resetSlots = await fetchParkingSlots();
       let slotsById = new Map(resetSlots.map((slot) => [slot.id, slot]));
@@ -258,9 +414,10 @@ export default function DeveloperTools({
       }
 
       step = "verify clean demo state";
-      const [verifiedSlots, verifiedReservations] = await Promise.all([
+      const [verifiedSlots, verifiedReservations, verifiedServices] = await Promise.all([
         fetchParkingSlots(),
         fetchReservations(),
+        fetchServiceRequests(),
       ]);
       const remainingSessions = verifiedReservations.filter((item) =>
         CURRENT_STATUSES.has(item.status),
@@ -271,11 +428,15 @@ export default function DeveloperTools({
       const unavailableSlots = verifiedSlots.filter(
         (item) => item.display_status !== "AVAILABLE",
       );
+      const cancellableServices = verifiedServices.filter(
+        (item) => item.status === "REQUESTED" || item.status === "ACCEPTED",
+      );
 
       if (
         remainingSessions.length > 0 ||
         nonFreeSlots.length > 0 ||
-        unavailableSlots.length > 0
+        unavailableSlots.length > 0 ||
+        cancellableServices.length > 0
       ) {
         const details = [
           remainingSessions.length
@@ -287,6 +448,9 @@ export default function DeveloperTools({
           unavailableSlots.length
             ? `${unavailableSlots.length} unavailable slot(s)`
             : null,
+          cancellableServices.length
+            ? `${cancellableServices.length} cancellable service(s)`
+            : null,
         ]
           .filter(Boolean)
           .join(", ");
@@ -294,15 +458,24 @@ export default function DeveloperTools({
       }
 
       setReservations(verifiedReservations);
+      setServiceRequests(verifiedServices);
       await refreshSlots(true);
-      setFeedback({ kind: "success", message: "Demo state reset successfully." });
+      const inProgressServices = verifiedServices.filter(
+        (item) => item.status === "IN_PROGRESS",
+      );
+      setFeedback({
+        kind: "success",
+        message: inProgressServices.length
+          ? `Demo state reset; ${inProgressServices.length} in-progress service(s) remain for provider completion.`
+          : "Demo state reset successfully.",
+      });
     } catch (error) {
       setFeedback({
         kind: "error",
         message: `Reset failed while trying to ${step}: ${errorMessage(error)}`,
       });
       try {
-        await Promise.all([refreshSlots(true), loadReservations()]);
+        await Promise.all([refreshSlots(true), loadReservations(), loadServices()]);
       } catch {
         // Keep the original reset error visible if refreshing also fails.
       }
@@ -341,7 +514,7 @@ export default function DeveloperTools({
                   Development / Demo Controls
                 </h2>
                 <p className="mt-1 text-xs font-semibold text-slate-300">
-                  Not part of the driver-facing application.
+                  Not part of the driver-facing application. Service controls show no phone data.
                 </p>
               </div>
               <button
@@ -467,6 +640,60 @@ export default function DeveloperTools({
                   )}
                 </div>
               </section>
+
+              <section>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="font-black text-slate-900">Service Provider Controls</h3>
+                  <span className="text-xs font-bold text-slate-500">
+                    {servicesLoading ? "Loading…" : currentServiceRequests.length}
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {currentServiceRequests.map((request) => (
+                    <ServiceProviderCard
+                      key={request.id}
+                      request={request}
+                      serviceName={serviceNames.get(request.service_type) ?? request.service_type}
+                      slotName={slotNames.get(request.slot_id) ?? `Slot ${request.slot_id}`}
+                      busy={actionKey === `service-${request.id}`}
+                      onUpdate={(item, nextStatus) => void updateProviderService(item, nextStatus)}
+                    />
+                  ))}
+                  {!servicesLoading && currentServiceRequests.length === 0 && (
+                    <p className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-xs font-bold text-slate-500">
+                      No current service requests.
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              {historicalServiceRequests.length > 0 && (
+                <section>
+                  <button
+                    type="button"
+                    onClick={() => setServiceHistoryOpen((value) => !value)}
+                    className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-black text-slate-700"
+                    aria-expanded={serviceHistoryOpen}
+                  >
+                    Service History ({historicalServiceRequests.length})
+                    <span aria-hidden="true">{serviceHistoryOpen ? "−" : "+"}</span>
+                  </button>
+                  {serviceHistoryOpen && (
+                    <div className="mt-3 space-y-3">
+                      {historicalServiceRequests.map((request) => (
+                        <ServiceProviderCard
+                          key={request.id}
+                          request={request}
+                          serviceName={serviceNames.get(request.service_type) ?? request.service_type}
+                          slotName={slotNames.get(request.slot_id) ?? `Slot ${request.slot_id}`}
+                          busy={false}
+                          onUpdate={() => undefined}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
 
               {historicalReservations.length > 0 && (
                 <section>

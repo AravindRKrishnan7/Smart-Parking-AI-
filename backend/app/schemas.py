@@ -9,6 +9,8 @@ from .models import (
     PhysicalStatus,
     ReservationLifecycleStatus,
     ReservationStatus,
+    ServiceRequestStatus,
+    ServiceType,
 )
 
 
@@ -85,8 +87,50 @@ class ReservationsResponse(BaseModel):
 
 
 class VehicleLocationResponse(BaseModel):
+    reservation_id: int
     vehicle_number: str
     parking_status: Literal["PARKED", "RESERVED_NOT_PARKED"]
     slot_id: int
     slot_name: str
     physical_status: PhysicalStatus
+
+
+class ServiceCatalogueItemResponse(BaseModel):
+    service_type: ServiceType
+    name: str
+    category: str
+    description: str
+    price: int | None
+    estimated_duration_minutes: int | None
+
+
+class ServiceCatalogueResponse(BaseModel):
+    services: list[ServiceCatalogueItemResponse]
+
+
+class ServiceRequestCreate(BaseModel):
+    reservation_id: int = Field(gt=0)
+    service_type: ServiceType
+
+
+class ServiceRequestStatusUpdate(BaseModel):
+    status: ServiceRequestStatus
+
+
+class ServiceRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    reservation_id: int
+    slot_id: int
+    vehicle_number: str
+    service_type: ServiceType
+    status: ServiceRequestStatus
+    price: int | None
+    estimated_duration_minutes: int | None
+    requested_at: datetime
+    updated_at: datetime
+
+
+class ServiceRequestsResponse(BaseModel):
+    services: list[ServiceRequestResponse]

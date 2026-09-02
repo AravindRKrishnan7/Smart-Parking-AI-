@@ -51,6 +51,7 @@ def find_vehicle_location(db: Session, vehicle_number: str) -> VehicleLocationRe
         else "RESERVED_NOT_PARKED"
     )
     return VehicleLocationResponse(
+        reservation_id=reservation.id,
         vehicle_number=normalized_vehicle_number,
         parking_status=parking_status,
         slot_id=slot.id,

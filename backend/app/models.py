@@ -30,6 +30,28 @@ class ReservationLifecycleStatus(str, Enum):
     EXPIRED = "EXPIRED"
 
 
+class ServiceType(str, Enum):
+    EXTERIOR_WASH = "EXTERIOR_WASH"
+    WATERLESS_WASH = "WATERLESS_WASH"
+    WASH_POLISH = "WASH_POLISH"
+    QUICK_WAX = "QUICK_WAX"
+    WINDSHIELD_CLEAN = "WINDSHIELD_CLEAN"
+    WHEEL_RIM_CLEAN = "WHEEL_RIM_CLEAN"
+    TYRE_SHINE = "TYRE_SHINE"
+    TYRE_PRESSURE = "TYRE_PRESSURE"
+    QUICK_CARE = "QUICK_CARE"
+    PREMIUM_SHINE = "PREMIUM_SHINE"
+    EV_CHARGING = "EV_CHARGING"
+
+
+class ServiceRequestStatus(str, Enum):
+    REQUESTED = "REQUESTED"
+    ACCEPTED = "ACCEPTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -101,4 +123,47 @@ class Reservation(Base):
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+
+class ServiceRequest(Base):
+    __tablename__ = "service_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reservation_id: Mapped[int] = mapped_column(
+        ForeignKey("reservations.id"),
+        index=True,
+        nullable=False,
+    )
+    slot_id: Mapped[int] = mapped_column(
+        ForeignKey("parking_slots.id"),
+        index=True,
+        nullable=False,
+    )
+    vehicle_number: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    service_type: Mapped[ServiceType] = mapped_column(
+        SqlEnum(ServiceType, native_enum=False, create_constraint=True),
+        nullable=False,
+    )
+    status: Mapped[ServiceRequestStatus] = mapped_column(
+        SqlEnum(ServiceRequestStatus, native_enum=False, create_constraint=True),
+        default=ServiceRequestStatus.REQUESTED,
+        index=True,
+        nullable=False,
+    )
+    price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_duration_minutes: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
     )

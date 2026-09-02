@@ -19,6 +19,7 @@ import {
   type VehicleLocation,
 } from "./api";
 import DeveloperTools from "./DeveloperTools";
+import WhileIShop from "./WhileIShop";
 
 const DEV_TOOLS_ENABLED =
   String(import.meta.env.VITE_ENABLE_DEV_TOOLS).toLowerCase() === "true";
@@ -34,7 +35,8 @@ type Screen =
   | "confirm"
   | "success"
   | "find-car"
-  | "car-located";
+  | "car-located"
+  | "while-i-shop";
 
 type UiSlotStatus = Lowercase<DisplayStatus>;
 
@@ -86,6 +88,13 @@ const Icon = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-full h-full">
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M9 17V7h4a3 3 0 010 6H9" />
+    </svg>
+  ),
+  services: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-full h-full">
+      <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" />
+      <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14z" />
+      <path d="M5 14l.7 1.3L7 16l-1.3.7L5 18l-.7-1.3L3 16l1.3-.7L5 14z" />
     </svg>
   ),
 };
@@ -290,7 +299,7 @@ function HomeScreen({ navigate, slots, loading, error }: { navigate: (s: Screen)
         {/* Cards */}
         <div className="mx-auto -mt-6 flex w-full max-w-4xl flex-1 flex-col gap-5 px-4 pb-8 sm:px-8 fade-in">
           <ConnectionNotice loading={loading} error={error} />
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
           <button
             onClick={() => navigate("phone")}
             className="bg-white rounded-3xl p-6 shadow-xl border border-blue-100 flex items-center gap-5 hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all"
@@ -320,6 +329,19 @@ function HomeScreen({ navigate, slots, loading, error }: { navigate: (s: Screen)
             </div>
             <div className="ml-auto text-cyan-400">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </button>
+
+          <button
+            onClick={() => navigate("while-i-shop")}
+            className="bg-white rounded-3xl p-6 shadow-xl border border-violet-100 flex items-center gap-5 hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all"
+          >
+            <div className="w-14 h-14 bg-violet-600 rounded-2xl flex items-center justify-center shadow-lg flex-shrink-0">
+              <div className="w-7 h-7 text-white">{Icon.services}</div>
+            </div>
+            <div className="text-left">
+              <div className="text-gray-900 font-black text-lg" style={{ fontFamily: "'Outfit',sans-serif" }}>While I Shop</div>
+              <div className="text-gray-500 text-sm font-medium mt-0.5">Available once your vehicle is parked</div>
             </div>
           </button>
           </div>
@@ -1299,6 +1321,13 @@ export default function App() {
           setVehicleNumber={setFindVehicleNumber}
           setVehicleLocation={setVehicleLocation}
         />
+      );
+    case "while-i-shop":
+      return (
+        <AppShell>
+          <TopBar title="While I Shop" onBack={() => navigate("home")} />
+          <WhileIShop initialVehicleNumber={vehicle} />
+        </AppShell>
       );
       default:
         return <HomeScreen navigate={navigate} {...liveSlots} />;

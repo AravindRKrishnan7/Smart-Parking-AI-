@@ -53,11 +53,62 @@ export interface ReservationsResponse {
 export type VehicleParkingStatus = "PARKED" | "RESERVED_NOT_PARKED";
 
 export interface VehicleLocation {
+  reservation_id: number;
   vehicle_number: string;
   parking_status: VehicleParkingStatus;
   slot_id: number;
   slot_name: string;
   physical_status: PhysicalStatus;
+}
+
+export type ServiceType =
+  | "EXTERIOR_WASH"
+  | "WATERLESS_WASH"
+  | "WASH_POLISH"
+  | "QUICK_WAX"
+  | "WINDSHIELD_CLEAN"
+  | "WHEEL_RIM_CLEAN"
+  | "TYRE_SHINE"
+  | "TYRE_PRESSURE"
+  | "QUICK_CARE"
+  | "PREMIUM_SHINE"
+  | "EV_CHARGING";
+
+export type ServiceRequestStatus =
+  | "REQUESTED"
+  | "ACCEPTED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELLED";
+
+export interface ServiceCatalogueItem {
+  service_type: ServiceType;
+  name: string;
+  category: string;
+  description: string;
+  price: number | null;
+  estimated_duration_minutes: number | null;
+}
+
+export interface ServiceRequest {
+  id: number;
+  reservation_id: number;
+  slot_id: number;
+  vehicle_number: string;
+  service_type: ServiceType;
+  status: ServiceRequestStatus;
+  price: number | null;
+  estimated_duration_minutes: number | null;
+  requested_at: string;
+  updated_at: string;
+}
+
+interface ServiceCatalogueResponse {
+  services: ServiceCatalogueItem[];
+}
+
+interface ServiceRequestsResponse {
+  services: ServiceRequest[];
 }
 
 export class ApiError extends Error {
@@ -202,4 +253,83 @@ export async function fetchVehicleLocation(
   }
 
   return (await response.json()) as VehicleLocation;
+}
+
+export async function fetchServiceCatalogue(): Promise<ServiceCatalogueItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/services/catalog`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to fetch service catalogue");
+  }
+  const data = (await response.json()) as ServiceCatalogueResponse;
+  if (!Array.isArray(data.services)) {
+    throw new Error("Parking server returned an unexpected service catalogue");
+  }
+  return data.services;
+}
+
+export async function fetchServiceRequests(filters?: {
+  reservationId?: number;
+  vehicleNumber?: string;
+  status?: ServiceRequestStatus;
+}): Promise<ServiceRequest[]> {
+  const query = new URLSearchParams();
+  if (filters?.reservationId !== undefined) {
+    query.set("reservation_id", String(filters.reservationId));
+  }
+  if (filters?.vehicleNumber) {
+    query.set("vehicle_number", filters.vehicleNumber);
+  }
+  if (filters?.status) query.set("status", filters.status);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/api/services${suffix}`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to fetch service requests");
+  }
+  const data = (await response.json()) as ServiceRequestsResponse;
+  if (!Array.isArray(data.services)) {
+    throw new Error("Parking server returned an unexpected service response");
+  }
+  return data.services;
+}
+
+export async function createServiceRequest(request: {
+  reservation_id: number;
+  service_type: ServiceType;
+}): Promise<ServiceRequest> {
+  const response = await fetch(`${API_BASE_URL}/api/services`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to request service");
+  }
+  return (await response.json()) as ServiceRequest;
+}
+
+export async function updateServiceRequestStatus(
+  serviceId: number,
+  status: ServiceRequestStatus,
+): Promise<ServiceRequest> {
+  const response = await fetch(`${API_BASE_URL}/api/services/${serviceId}/status`, {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to update service request");
+  }
+  return (await response.json()) as ServiceRequest;
 }

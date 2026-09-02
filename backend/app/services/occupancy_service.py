@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import update as sql_update
+from sqlalchemy import select, update as sql_update
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -10,6 +10,8 @@ from ..models import (
     Reservation,
     ReservationLifecycleStatus,
     ReservationStatus,
+    ServiceRequest,
+    ServiceRequestStatus,
 )
 from ..schemas import OccupancyUpdate
 
@@ -34,6 +36,7 @@ def update_occupancy(db: Session, occupancy_update: OccupancyUpdate) -> ParkingS
 
     previous_physical_status = slot.physical_status
     physical_status_changed = previous_physical_status != occupancy_update.physical_status
+    now = datetime.now(UTC)
 
     if physical_status_changed and slot.reservation_status == ReservationStatus.RESERVED:
         if (
@@ -52,20 +55,40 @@ def update_occupancy(db: Session, occupancy_update: OccupancyUpdate) -> ParkingS
             previous_physical_status == PhysicalStatus.OCCUPIED
             and occupancy_update.physical_status == PhysicalStatus.FREE
         ):
-            completion = db.execute(
-                sql_update(Reservation)
+            reservation_id = db.scalar(
+                select(Reservation.id)
                 .where(
                     Reservation.slot_id == slot.id,
                     Reservation.status == ReservationLifecycleStatus.IN_USE,
+                )
+                .limit(1)
+            )
+            completion = db.execute(
+                sql_update(Reservation)
+                .where(
+                    Reservation.id == reservation_id,
                 )
                 .values(status=ReservationLifecycleStatus.COMPLETED)
             )
             if completion.rowcount == 1:
                 slot.reservation_status = ReservationStatus.AVAILABLE
+                db.execute(
+                    sql_update(ServiceRequest)
+                    .where(
+                        ServiceRequest.reservation_id == reservation_id,
+                        ServiceRequest.status.in_(
+                            [
+                                ServiceRequestStatus.REQUESTED,
+                                ServiceRequestStatus.ACCEPTED,
+                            ]
+                        ),
+                    )
+                    .values(status=ServiceRequestStatus.CANCELLED, updated_at=now)
+                )
 
     slot.physical_status = occupancy_update.physical_status
     slot.occupancy_source = occupancy_update.source
-    slot.updated_at = datetime.now(UTC)
+    slot.updated_at = now
     db.commit()
     db.refresh(slot)
     return slot
