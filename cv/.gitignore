@@ -1,0 +1,7 @@
+.venv/
+*.mp4
+*.pt
+*.tmp
+*.temp
+outputs/*
+!outputs/.gitkeep
