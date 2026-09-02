@@ -2,6 +2,12 @@ export type PhysicalStatus = "FREE" | "OCCUPIED";
 export type ReservationStatus = "AVAILABLE" | "RESERVED";
 export type DisplayStatus = "AVAILABLE" | "RESERVED" | "OCCUPIED";
 export type OccupancySource = "CAMERA" | "SENSOR";
+export type ReservationLifecycleStatus =
+  | "ACTIVE"
+  | "IN_USE"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "EXPIRED";
 
 export interface ParkingSlot {
   id: number;
@@ -16,6 +22,32 @@ export interface ParkingSlot {
 
 export interface ParkingSlotsResponse {
   slots: ParkingSlot[];
+}
+
+export interface ReservationCreate {
+  slot_id: number;
+  phone_number: string;
+  vehicle_number: string;
+}
+
+export interface Reservation {
+  id: number;
+  slot_id: number;
+  phone_number: string;
+  vehicle_number: string;
+  status: ReservationLifecycleStatus;
+  created_at: string;
+  expires_at: string | null;
+}
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
 }
 
 const API_BASE_URL = (
@@ -41,4 +73,57 @@ export async function fetchParkingSlots(
   }
 
   return data.slots;
+}
+
+async function parseApiError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<ApiError> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === "string") {
+      return new ApiError(response.status, body.detail);
+    }
+  } catch {
+    // Use the safe fallback when the server does not return JSON.
+  }
+
+  return new ApiError(response.status, fallbackMessage);
+}
+
+export async function createReservation(
+  reservation: ReservationCreate,
+): Promise<Reservation> {
+  const response = await fetch(`${API_BASE_URL}/api/reservations`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(reservation),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to create reservation");
+  }
+
+  return (await response.json()) as Reservation;
+}
+
+export async function cancelReservation(
+  reservationId: number,
+): Promise<Reservation> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/reservations/${reservationId}`,
+    {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    },
+  );
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to cancel reservation");
+  }
+
+  return (await response.json()) as Reservation;
 }

@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  ApiError,
+  cancelReservation,
+  createReservation,
   fetchParkingSlots,
   type DisplayStatus,
   type ParkingSlot,
+  type Reservation,
 } from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -20,6 +24,11 @@ type Screen =
   | "car-located";
 
 type UiSlotStatus = Lowercase<DisplayStatus>;
+
+interface ActiveReservation {
+  data: Reservation;
+  slotName: string;
+}
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const Icon = {
@@ -124,6 +133,28 @@ function InputField({ label, value, onChange, placeholder, type = "text", maxLen
       />
     </div>
   );
+}
+
+function phoneValidationMessage(phone: string): string | null {
+  const trimmed = phone.trim();
+  const hasLeadingPlus = trimmed.startsWith("+");
+  const normalized = trimmed.replace(/[\s\-()]/g, "");
+  const digits = hasLeadingPlus ? normalized.slice(1) : normalized;
+
+  if (!/^\d{8,15}$/.test(digits)) {
+    return "Enter a valid phone number with 8 to 15 digits.";
+  }
+
+  return null;
+}
+
+function vehicleValidationMessage(vehicle: string): string | null {
+  const normalized = vehicle.toUpperCase().replace(/\s/g, "");
+  if (!normalized) return "Enter your vehicle registration number.";
+  if (normalized.length > 20) {
+    return "Vehicle registration must be 20 characters or fewer.";
+  }
+  return null;
 }
 
 function toUiSlotStatus(displayStatus: DisplayStatus): UiSlotStatus {
@@ -304,8 +335,19 @@ function HomeScreen({ navigate, slots, loading, error }: { navigate: (s: Screen)
   );
 }
 
-function PhoneScreen({ navigate }: { navigate: (s: Screen) => void }) {
-  const [phone, setPhone] = useState("");
+function PhoneScreen({ navigate, phone, setPhone }: {
+  navigate: (s: Screen) => void;
+  phone: string;
+  setPhone: (phone: string) => void;
+}) {
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const continueToOtp = () => {
+    const message = phoneValidationMessage(phone);
+    setValidationError(message);
+    if (!message) navigate("otp");
+  };
+
   return (
     <AppShell>
       <TopBar title="Enter Phone Number" onBack={() => navigate("home")} />
@@ -324,10 +366,16 @@ function PhoneScreen({ navigate }: { navigate: (s: Screen) => void }) {
           onChange={setPhone}
           placeholder="+91 98765 43210"
           type="tel"
-          maxLength={15}
+          maxLength={30}
         />
 
-        <PrimaryBtn onClick={() => phone.length >= 8 && navigate("otp")} disabled={phone.length < 8}>
+        {validationError && (
+          <p className="-mt-3 text-sm font-semibold text-red-600" role="alert">
+            {validationError}
+          </p>
+        )}
+
+        <PrimaryBtn onClick={continueToOtp} disabled={!phone.trim()}>
           Send OTP →
         </PrimaryBtn>
 
@@ -337,7 +385,7 @@ function PhoneScreen({ navigate }: { navigate: (s: Screen) => void }) {
   );
 }
 
-function OtpScreen({ navigate, phone }: { navigate: (s: Screen) => void; phone?: string }) {
+function OtpScreen({ navigate, phone }: { navigate: (s: Screen) => void; phone: string }) {
   const [otp, setOtp] = useState(["", "", "", ""]);
   const [resent, setResent] = useState(false);
 
@@ -361,7 +409,7 @@ function OtpScreen({ navigate, phone }: { navigate: (s: Screen) => void; phone?:
           <div className="w-14 h-14 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
             <div className="w-7 h-7 text-blue-600">{Icon.shield}</div>
           </div>
-          <p className="text-gray-600 text-sm font-medium">Code sent to <span className="font-bold text-gray-800">+91 98765 43210</span></p>
+          <p className="text-gray-600 text-sm font-medium">Code sent to <span className="font-bold text-gray-800">{phone}</span></p>
         </div>
 
         <div className="flex justify-center gap-3">
@@ -397,8 +445,22 @@ function OtpScreen({ navigate, phone }: { navigate: (s: Screen) => void; phone?:
   );
 }
 
-function VehicleScreen({ navigate, setVehicle }: { navigate: (s: Screen) => void; setVehicle: (v: string) => void }) {
-  const [reg, setReg] = useState("KL07AB1234");
+function VehicleScreen({ navigate, vehicle, setVehicle }: {
+  navigate: (s: Screen) => void;
+  vehicle: string;
+  setVehicle: (vehicle: string) => void;
+}) {
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const checkAvailability = () => {
+    const message = vehicleValidationMessage(vehicle);
+    setValidationError(message);
+    if (!message) {
+      setVehicle(vehicle.toUpperCase().replace(/\s/g, ""));
+      navigate("availability");
+    }
+  };
+
   return (
     <AppShell>
       <TopBar title="Vehicle Details" onBack={() => navigate("otp")} />
@@ -413,18 +475,24 @@ function VehicleScreen({ navigate, setVehicle }: { navigate: (s: Screen) => void
 
         <InputField
           label="Vehicle Registration Number"
-          value={reg}
-          onChange={v => setReg(v.toUpperCase())}
+          value={vehicle}
+          onChange={v => setVehicle(v.toUpperCase())}
           placeholder="KL07AB1234"
-          maxLength={12}
+          maxLength={30}
         />
+
+        {validationError && (
+          <p className="-mt-3 text-sm font-semibold text-red-600" role="alert">
+            {validationError}
+          </p>
+        )}
 
         <div className="bg-blue-50 rounded-xl p-3 flex gap-2">
           <span className="text-blue-500 text-xs">ℹ️</span>
           <span className="text-blue-700 text-xs font-medium">Enter the number exactly as printed on your number plate, without spaces.</span>
         </div>
 
-        <PrimaryBtn onClick={() => { if (reg.length >= 6) { setVehicle(reg); navigate("availability"); }}} disabled={reg.length < 6}>
+        <PrimaryBtn onClick={checkAvailability} disabled={!vehicle.trim()}>
           Check Availability →
         </PrimaryBtn>
       </div>
@@ -432,7 +500,11 @@ function VehicleScreen({ navigate, setVehicle }: { navigate: (s: Screen) => void
   );
 }
 
-function AvailabilityScreen({ navigate, vehicle, slots, loading, error }: { navigate: (s: Screen) => void; vehicle: string } & LiveSlotProps) {
+function AvailabilityScreen({ navigate, vehicle, slots, loading, error, notice }: {
+  navigate: (s: Screen) => void;
+  vehicle: string;
+  notice?: string | null;
+} & LiveSlotProps) {
   const legend = [
     { cls: "bg-green-100 border-green-400 text-green-700", label: "Available" },
     { cls: "bg-red-100 border-red-400 text-red-600", label: "Occupied" },
@@ -443,6 +515,11 @@ function AvailabilityScreen({ navigate, vehicle, slots, loading, error }: { navi
       <TopBar title="Check Availability" onBack={() => navigate("vehicle")} />
       <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-4 py-6 sm:px-8 fade-in">
         <ConnectionNotice loading={loading} error={error} />
+        {notice && (
+          <div className="rounded-2xl border border-green-200 bg-green-50 p-3 text-sm font-semibold text-green-700" role="status">
+            {notice}
+          </div>
+        )}
         <div className="flex gap-2 flex-wrap">
           {legend.map(l => (
             <span key={l.label} className={`${l.cls} border text-xs font-bold px-2.5 py-1 rounded-full`}>{l.label}</span>
@@ -510,9 +587,80 @@ function SelectSlotScreen({ navigate, vehicle, selectedSlot, setSelectedSlot, sl
   );
 }
 
-function ConfirmScreen({ navigate, vehicle, selectedSlot }: { navigate: (s: Screen) => void; vehicle: string; selectedSlot: string }) {
+function ConfirmScreen({
+  navigate,
+  phone,
+  vehicle,
+  selectedSlot,
+  slots,
+  refreshSlots,
+  setSelectedSlot,
+  setReservation,
+}: {
+  navigate: (s: Screen) => void;
+  phone: string;
+  vehicle: string;
+  selectedSlot: string;
+  slots: ParkingSlot[];
+  refreshSlots: (force?: boolean) => Promise<void>;
+  setSelectedSlot: (slot: string) => void;
+  setReservation: (reservation: ActiveReservation) => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [hasConflict, setHasConflict] = useState(false);
+
+  const submitReservation = async () => {
+    if (submitting) return;
+
+    const phoneError = phoneValidationMessage(phone);
+    const vehicleError = vehicleValidationMessage(vehicle);
+    if (phoneError || vehicleError) {
+      setSubmitError(phoneError ?? vehicleError);
+      return;
+    }
+
+    const backendSlot = slots.find((slot) => slot.name === selectedSlot);
+    if (!backendSlot || backendSlot.display_status !== "AVAILABLE") {
+      setHasConflict(true);
+      setSubmitError("This parking slot is no longer available. Please choose another slot.");
+      setSelectedSlot("");
+      await refreshSlots(true);
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+    setHasConflict(false);
+    try {
+      const created = await createReservation({
+        slot_id: backendSlot.id,
+        phone_number: phone,
+        vehicle_number: vehicle,
+      });
+      setReservation({ data: created, slotName: backendSlot.name });
+      await refreshSlots(true);
+      navigate("success");
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 409) {
+        setHasConflict(true);
+        setSubmitError("This parking slot is no longer available. Please choose another slot.");
+        setSelectedSlot("");
+        await refreshSlots(true);
+      } else if (requestError instanceof ApiError && requestError.status === 422) {
+        setSubmitError("Please check your phone and vehicle details, then try again.");
+      } else if (requestError instanceof TypeError) {
+        setSubmitError("The parking server is unreachable. Please try again.");
+      } else {
+        setSubmitError("We couldn't create your reservation. Please try again.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const rows = [
-    { label: "Phone Number", value: "+91 98765 43210" },
+    { label: "Phone Number", value: phone },
     { label: "Vehicle Number", value: vehicle },
     { label: "Parking Slot", value: selectedSlot },
     { label: "Status", value: "Pending Confirmation" },
@@ -538,19 +686,67 @@ function ConfirmScreen({ navigate, vehicle, selectedSlot }: { navigate: (s: Scre
           ))}
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-xs text-amber-700 font-medium">
-          ⚠️ Reservation held for 15 minutes. Please arrive promptly.
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 text-xs text-blue-700 font-medium">
+          Your slot will be reserved as soon as the parking server confirms this request.
         </div>
 
-        <PrimaryBtn onClick={() => navigate("success")}>
-          Confirm Reservation ✓
+        {submitError && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700" role="alert">
+            {submitError}
+          </div>
+        )}
+
+        {hasConflict && (
+          <button
+            type="button"
+            onClick={() => navigate("select-slot")}
+            className="w-full rounded-2xl border-2 border-blue-600 py-3.5 font-bold text-blue-600 transition-colors hover:bg-blue-50"
+          >
+            Choose Another Slot
+          </button>
+        )}
+
+        <PrimaryBtn onClick={() => void submitReservation()} disabled={submitting || !selectedSlot}>
+          {submitting ? "Reserving..." : "Confirm Reservation ✓"}
         </PrimaryBtn>
       </div>
     </AppShell>
   );
 }
 
-function SuccessScreen({ navigate, vehicle, selectedSlot }: { navigate: (s: Screen) => void; vehicle: string; selectedSlot: string }) {
+function SuccessScreen({ navigate, reservation, refreshSlots, onCancelled }: {
+  navigate: (s: Screen) => void;
+  reservation: ActiveReservation;
+  refreshSlots: (force?: boolean) => Promise<void>;
+  onCancelled: (message: string) => void;
+}) {
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  const cancelActiveReservation = async () => {
+    if (cancelling || reservation.data.status !== "ACTIVE") return;
+
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await cancelReservation(reservation.data.id);
+      await refreshSlots(true);
+      onCancelled(`Reservation cancelled. ${reservation.slotName} is available again.`);
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 409) {
+        setCancelError("This parking session has already started and can no longer be cancelled.");
+      } else if (requestError instanceof ApiError && requestError.status === 404) {
+        setCancelError("This reservation could not be found.");
+      } else if (requestError instanceof TypeError) {
+        setCancelError("The parking server is unreachable. Please try again.");
+      } else {
+        setCancelError("We couldn't cancel this reservation. Please try again.");
+      }
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   return (
     <AppShell>
       <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-gradient-to-br from-blue-700 via-blue-600 to-cyan-500 px-5 py-10 sm:px-16 fade-in">
@@ -563,7 +759,7 @@ function SuccessScreen({ navigate, vehicle, selectedSlot }: { navigate: (s: Scre
         </div>
 
         <div className="w-full max-w-2xl bg-white/20 backdrop-blur-sm rounded-3xl p-5 text-white">
-          {[["Slot", selectedSlot], ["Vehicle", vehicle], ["Duration", "Up to 15 min hold"], ["Status", "✓ Confirmed"]].map(([k, v]) => (
+          {[["Slot", reservation.slotName], ["Vehicle", reservation.data.vehicle_number], ["Status", reservation.data.status]].map(([k, v]) => (
             <div key={k} className="flex justify-between py-2 border-b border-white/20 last:border-0">
               <span className="text-blue-100 text-sm font-semibold">{k}</span>
               <span className="font-black text-sm" style={{ fontFamily: "'Outfit',sans-serif" }}>{v}</span>
@@ -578,6 +774,23 @@ function SuccessScreen({ navigate, vehicle, selectedSlot }: { navigate: (s: Scre
         >
           View Parking Map
         </button>
+
+        {reservation.data.status === "ACTIVE" && (
+          <button
+            type="button"
+            onClick={() => void cancelActiveReservation()}
+            disabled={cancelling}
+            className="w-full max-w-2xl rounded-2xl border-2 border-white/70 py-3.5 font-black text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {cancelling ? "Cancelling..." : "Cancel Reservation"}
+          </button>
+        )}
+
+        {cancelError && (
+          <div className="w-full max-w-2xl rounded-2xl border border-red-200 bg-white p-3 text-center text-sm font-semibold text-red-700" role="alert">
+            {cancelError}
+          </div>
+        )}
 
         <button onClick={() => navigate("home")} className="text-blue-100 text-sm font-medium hover:text-white">
           Back to Home
@@ -776,45 +989,58 @@ function CarLocatedScreen({ navigate, slots }: { navigate: (s: Screen) => void; 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
+  const [phone, setPhone] = useState("");
   const [vehicle, setVehicle] = useState("KL07AB1234");
   const [selectedSlot, setSelectedSlot] = useState("");
+  const [reservation, setReservation] = useState<ActiveReservation | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [slots, setSlots] = useState<ParkingSlot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const activeSlotRequest = useRef<AbortController | null>(null);
+
+  const refreshSlots = useCallback(async (force = false) => {
+    if (activeSlotRequest.current) {
+      if (!force) return;
+      activeSlotRequest.current.abort();
+    }
+
+    const controller = new AbortController();
+    activeSlotRequest.current = controller;
+
+    try {
+      const nextSlots = await fetchParkingSlots(controller.signal);
+      if (!mountedRef.current) return;
+      setSlots(nextSlots);
+      setError(null);
+    } catch (requestError) {
+      if (
+        !mountedRef.current ||
+        (requestError instanceof DOMException && requestError.name === "AbortError")
+      ) return;
+      setError("Unable to connect to parking server");
+    } finally {
+      if (activeSlotRequest.current === controller) {
+        activeSlotRequest.current = null;
+      }
+      if (mountedRef.current) setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let mounted = true;
-    let activeRequest: AbortController | null = null;
-
-    const refreshSlots = async () => {
-      if (activeRequest) return;
-
-      const controller = new AbortController();
-      activeRequest = controller;
-
-      try {
-        const nextSlots = await fetchParkingSlots(controller.signal);
-        if (!mounted) return;
-        setSlots(nextSlots);
-        setError(null);
-      } catch (requestError) {
-        if (!mounted || (requestError instanceof DOMException && requestError.name === "AbortError")) return;
-        setError("Unable to connect to parking server");
-      } finally {
-        if (activeRequest === controller) activeRequest = null;
-        if (mounted) setLoading(false);
-      }
-    };
-
+    mountedRef.current = true;
     void refreshSlots();
     const intervalId = window.setInterval(() => void refreshSlots(), 2_000);
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       window.clearInterval(intervalId);
-      activeRequest?.abort();
+      const request = activeSlotRequest.current;
+      activeSlotRequest.current = null;
+      request?.abort();
     };
-  }, []);
+  }, [refreshSlots]);
 
   useEffect(() => {
     if (
@@ -827,20 +1053,30 @@ export default function App() {
     }
   }, [selectedSlot, slots]);
 
-  const navigate = (s: Screen) => setScreen(s);
+  const navigate = (s: Screen) => {
+    if (s !== "availability") setNotice(null);
+    setScreen(s);
+  };
+
+  const handleCancellation = (message: string) => {
+    setReservation(null);
+    setSelectedSlot("");
+    setNotice(message);
+    setScreen("availability");
+  };
   const liveSlots = { slots, loading, error };
 
   switch (screen) {
     case "home":
       return <HomeScreen navigate={navigate} {...liveSlots} />;
     case "phone":
-      return <PhoneScreen navigate={navigate} />;
+      return <PhoneScreen navigate={navigate} phone={phone} setPhone={setPhone} />;
     case "otp":
-      return <OtpScreen navigate={navigate} />;
+      return <OtpScreen navigate={navigate} phone={phone} />;
     case "vehicle":
-      return <VehicleScreen navigate={navigate} setVehicle={setVehicle} />;
+      return <VehicleScreen navigate={navigate} vehicle={vehicle} setVehicle={setVehicle} />;
     case "availability":
-      return <AvailabilityScreen navigate={navigate} vehicle={vehicle} {...liveSlots} />;
+      return <AvailabilityScreen navigate={navigate} vehicle={vehicle} notice={notice} {...liveSlots} />;
     case "select-slot":
       return (
         <SelectSlotScreen
@@ -852,9 +1088,29 @@ export default function App() {
         />
       );
     case "confirm":
-      return <ConfirmScreen navigate={navigate} vehicle={vehicle} selectedSlot={selectedSlot} />;
+      return (
+        <ConfirmScreen
+          navigate={navigate}
+          phone={phone}
+          vehicle={vehicle}
+          selectedSlot={selectedSlot}
+          slots={slots}
+          refreshSlots={refreshSlots}
+          setSelectedSlot={setSelectedSlot}
+          setReservation={setReservation}
+        />
+      );
     case "success":
-      return <SuccessScreen navigate={navigate} vehicle={vehicle} selectedSlot={selectedSlot} />;
+      return reservation ? (
+        <SuccessScreen
+          navigate={navigate}
+          reservation={reservation}
+          refreshSlots={refreshSlots}
+          onCancelled={handleCancellation}
+        />
+      ) : (
+        <HomeScreen navigate={navigate} {...liveSlots} />
+      );
     case "find-car":
       return <FindCarScreen navigate={navigate} />;
     case "car-located":
