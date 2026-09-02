@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .init_db import initialize_database
 from .routers.reservations import router as reservations_router
 from .routers.slots import router as slots_router
+from .routers.vehicles import router as vehicles_router
 
 
 @asynccontextmanager
@@ -17,8 +18,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="SmartPark AI API",
-    description="Parking-slot occupancy and reservation backend",
-    version="2.0.0",
+    description="Parking occupancy, reservation, and vehicle-location backend",
+    version="4.0.0",
     lifespan=lifespan,
 )
 
@@ -32,3 +33,4 @@ app.add_middleware(
 
 app.include_router(slots_router)
 app.include_router(reservations_router)
+app.include_router(vehicles_router)

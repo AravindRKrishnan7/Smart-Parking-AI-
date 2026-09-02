@@ -1,5 +1,5 @@
-from datetime import datetime
 import re
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -35,6 +35,15 @@ class ParkingSlotsResponse(BaseModel):
     slots: list[ParkingSlotResponse]
 
 
+def normalize_vehicle_number(value: str) -> str:
+    normalized = "".join(value.upper().split())
+    if not normalized:
+        raise ValueError("vehicle_number must not be empty")
+    if len(normalized) > 20:
+        raise ValueError("vehicle_number must be at most 20 characters")
+    return normalized
+
+
 class ReservationCreate(BaseModel):
     slot_id: int = Field(gt=0)
     phone_number: str = Field(max_length=30)
@@ -56,12 +65,7 @@ class ReservationCreate(BaseModel):
     @field_validator("vehicle_number")
     @classmethod
     def normalize_vehicle_number(cls, value: str) -> str:
-        normalized = "".join(value.upper().split())
-        if not normalized:
-            raise ValueError("vehicle_number must not be empty")
-        if len(normalized) > 20:
-            raise ValueError("vehicle_number must be at most 20 characters")
-        return normalized
+        return normalize_vehicle_number(value)
 
 
 class ReservationResponse(BaseModel):
@@ -78,3 +82,11 @@ class ReservationResponse(BaseModel):
 
 class ReservationsResponse(BaseModel):
     reservations: list[ReservationResponse]
+
+
+class VehicleLocationResponse(BaseModel):
+    vehicle_number: str
+    parking_status: Literal["PARKED", "RESERVED_NOT_PARKED"]
+    slot_id: int
+    slot_name: str
+    physical_status: PhysicalStatus
