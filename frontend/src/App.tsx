@@ -18,6 +18,10 @@ import {
   type Reservation,
   type VehicleLocation,
 } from "./api";
+import DeveloperTools from "./DeveloperTools";
+
+const DEV_TOOLS_ENABLED =
+  String(import.meta.env.VITE_ENABLE_DEV_TOOLS).toLowerCase() === "true";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Screen =
@@ -1216,7 +1220,8 @@ export default function App() {
   };
   const liveSlots = { slots, loading, error };
 
-  switch (screen) {
+  const renderScreen = () => {
+    switch (screen) {
     case "home":
       return <HomeScreen navigate={navigate} {...liveSlots} />;
     case "phone":
@@ -1285,7 +1290,22 @@ export default function App() {
           setVehicleLocation={setVehicleLocation}
         />
       );
-    default:
-      return <HomeScreen navigate={navigate} {...liveSlots} />;
-  }
+      default:
+        return <HomeScreen navigate={navigate} {...liveSlots} />;
+    }
+  };
+
+  return (
+    <>
+      {renderScreen()}
+      {DEV_TOOLS_ENABLED && (
+        <DeveloperTools
+          slots={slots}
+          slotsLoading={loading}
+          slotsError={error}
+          refreshSlots={refreshSlots}
+        />
+      )}
+    </>
+  );
 }

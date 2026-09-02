@@ -24,6 +24,12 @@ export interface ParkingSlotsResponse {
   slots: ParkingSlot[];
 }
 
+export interface OccupancyUpdate {
+  slot_id: number;
+  physical_status: PhysicalStatus;
+  source: OccupancySource;
+}
+
 export interface ReservationCreate {
   slot_id: number;
   phone_number: string;
@@ -38,6 +44,10 @@ export interface Reservation {
   status: ReservationLifecycleStatus;
   created_at: string;
   expires_at: string | null;
+}
+
+export interface ReservationsResponse {
+  reservations: Reservation[];
 }
 
 export type VehicleParkingStatus = "PARKED" | "RESERVED_NOT_PARKED";
@@ -85,6 +95,25 @@ export async function fetchParkingSlots(
   return data.slots;
 }
 
+export async function updateOccupancy(
+  update: OccupancyUpdate,
+): Promise<ParkingSlot> {
+  const response = await fetch(`${API_BASE_URL}/api/slots/occupancy`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(update),
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to update slot occupancy");
+  }
+
+  return (await response.json()) as ParkingSlot;
+}
+
 async function parseApiError(
   response: Response,
   fallbackMessage: string,
@@ -118,6 +147,24 @@ export async function createReservation(
   }
 
   return (await response.json()) as Reservation;
+}
+
+export async function fetchReservations(): Promise<Reservation[]> {
+  const response = await fetch(`${API_BASE_URL}/api/reservations`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to fetch reservations");
+  }
+
+  const data = (await response.json()) as ReservationsResponse;
+  if (!Array.isArray(data.reservations)) {
+    throw new Error("Parking server returned an unexpected response");
+  }
+
+  return data.reservations;
 }
 
 export async function cancelReservation(
