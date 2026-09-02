@@ -40,6 +40,16 @@ export interface Reservation {
   expires_at: string | null;
 }
 
+export type VehicleParkingStatus = "PARKED" | "RESERVED_NOT_PARKED";
+
+export interface VehicleLocation {
+  vehicle_number: string;
+  parking_status: VehicleParkingStatus;
+  slot_id: number;
+  slot_name: string;
+  physical_status: PhysicalStatus;
+}
+
 export class ApiError extends Error {
   status: number;
 
@@ -126,4 +136,23 @@ export async function cancelReservation(
   }
 
   return (await response.json()) as Reservation;
+}
+
+export async function fetchVehicleLocation(
+  vehicleNumber: string,
+): Promise<VehicleLocation> {
+  const encodedVehicleNumber = encodeURIComponent(vehicleNumber);
+  const response = await fetch(
+    `${API_BASE_URL}/api/vehicles/${encodedVehicleNumber}/location`,
+    {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    throw await parseApiError(response, "Unable to locate vehicle");
+  }
+
+  return (await response.json()) as VehicleLocation;
 }

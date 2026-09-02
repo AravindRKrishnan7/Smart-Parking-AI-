@@ -1,13 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   ApiError,
   cancelReservation,
   createReservation,
   fetchParkingSlots,
+  fetchVehicleLocation,
   type DisplayStatus,
   type ParkingSlot,
   type Reservation,
+  type VehicleLocation,
 } from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -800,8 +809,50 @@ function SuccessScreen({ navigate, reservation, refreshSlots, onCancelled }: {
   );
 }
 
-function FindCarScreen({ navigate }: { navigate: (s: Screen) => void }) {
-  const [reg, setReg] = useState("KL07AB1234");
+function FindCarScreen({
+  navigate,
+  vehicleNumber,
+  setVehicleNumber,
+  setVehicleLocation,
+}: {
+  navigate: (s: Screen) => void;
+  vehicleNumber: string;
+  setVehicleNumber: (vehicleNumber: string) => void;
+  setVehicleLocation: (location: VehicleLocation) => void;
+}) {
+  const [locating, setLocating] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+
+  const locateVehicle = async () => {
+    if (locating) return;
+
+    const validationError = vehicleValidationMessage(vehicleNumber);
+    if (validationError) {
+      setLookupError(validationError);
+      return;
+    }
+
+    setLocating(true);
+    setLookupError(null);
+    try {
+      const location = await fetchVehicleLocation(vehicleNumber);
+      setVehicleLocation(location);
+      navigate("car-located");
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 404) {
+        setLookupError("No active parking session found for this vehicle.");
+      } else if (requestError instanceof ApiError && requestError.status === 422) {
+        setLookupError("Enter a valid vehicle registration number.");
+      } else if (requestError instanceof TypeError) {
+        setLookupError("The parking server is unreachable. Please try again.");
+      } else {
+        setLookupError("We couldn't locate this vehicle. Please try again.");
+      }
+    } finally {
+      setLocating(false);
+    }
+  };
+
   return (
     <AppShell>
       <TopBar title="Find My Car" onBack={() => navigate("home")} />
@@ -815,20 +866,26 @@ function FindCarScreen({ navigate }: { navigate: (s: Screen) => void }) {
 
         <InputField
           label="Vehicle Registration Number"
-          value={reg}
-          onChange={v => setReg(v.toUpperCase())}
+          value={vehicleNumber}
+          onChange={v => setVehicleNumber(v.toUpperCase())}
           placeholder="KL07AB1234"
-          maxLength={12}
+          maxLength={30}
         />
 
-        <PrimaryBtn onClick={() => reg.length >= 6 && navigate("car-located")} disabled={reg.length < 6}>
-          Locate Vehicle →
+        {lookupError && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700" role="alert">
+            {lookupError}
+          </div>
+        )}
+
+        <PrimaryBtn onClick={() => void locateVehicle()} disabled={locating || !vehicleNumber.trim()}>
+          {locating ? "Locating..." : "Locate Vehicle →"}
         </PrimaryBtn>
 
         <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200">
           <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Recent Searches</div>
           {["KL07AB1234", "MH12XY9876"].map(v => (
-            <button key={v} onClick={() => setReg(v)} className="flex items-center gap-2 w-full py-2 text-sm font-semibold text-gray-600 hover:text-blue-600 border-b border-gray-100 last:border-0">
+            <button key={v} onClick={() => setVehicleNumber(v)} className="flex items-center gap-2 w-full py-2 text-sm font-semibold text-gray-600 hover:text-blue-600 border-b border-gray-100 last:border-0">
               <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
               {v}
             </button>
@@ -839,114 +896,205 @@ function FindCarScreen({ navigate }: { navigate: (s: Screen) => void }) {
   );
 }
 
-// Walking route SVG overlay inside the parking layout
-function ParkingMapWithRoute({ targetSlot, slots }: { targetSlot: string; slots: ParkingSlot[] }) {
-  // Grid: 2 rows × 4 cols, slots P1–P8
-  // We'll draw an SVG overlay with entrance at bottom-center and route to P5 (col 1, row 2 = index 4)
+interface RouteGeometry {
+  width: number;
+  height: number;
+  entranceX: number;
+  entranceY: number;
+  approachY: number;
+  targetX: number;
+  targetY: number;
+}
 
-  // slot positions in a 4x2 grid (col, row) 0-indexed
-  const getPos = (idx: number) => ({ col: idx % 4, row: Math.floor(idx / 4) });
+// The route is measured against the rendered grid, so its endpoint stays on
+// the target slot as the responsive layout changes size.
+function ParkingMapWithRoute({
+  targetSlot,
+  slots,
+  parkingStatus,
+}: {
+  targetSlot: string;
+  slots: ParkingSlot[];
+  parkingStatus: VehicleLocation["parking_status"];
+}) {
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const slotElements = useRef(new Map<string, HTMLDivElement>());
+  const [route, setRoute] = useState<RouteGeometry | null>(null);
+  const isParked = parkingStatus === "PARKED";
+  const routeColor = isParked ? "#2563eb" : "#f97316";
 
-  // Target is P5 (index 4) → col 0, row 1
-  const targetIdx = slots.findIndex(s => s.name === targetSlot);
-  const tPos = getPos(targetIdx >= 0 ? targetIdx : 4);
+  useLayoutEffect(() => {
+    const map = mapRef.current;
+    const target = slotElements.current.get(targetSlot);
+    if (!map || !target) {
+      setRoute(null);
+      return;
+    }
 
-  // SVG dimensions: each cell ~70px wide, ~80px tall, with padding
-  const cellW = 70, cellH = 80, padX = 16, padY = 16;
-  const svgW = 4 * cellW + padX * 2;
-  const svgH = 2 * cellH + padY * 2 + 36; // extra for entrance
+    const updateRoute = () => {
+      const mapRect = map.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const entranceX = mapRect.width / 2;
+      const entranceY = mapRect.height - 15;
+      const targetX = targetRect.left - mapRect.left + targetRect.width / 2;
+      const targetY = targetRect.top - mapRect.top + targetRect.height / 2;
+      const targetBottom = targetRect.bottom - mapRect.top;
 
-  const entranceX = svgW / 2;
-  const entranceY = svgH - 12;
+      setRoute({
+        width: mapRect.width,
+        height: mapRect.height,
+        entranceX,
+        entranceY,
+        approachY: Math.min(entranceY - 24, targetBottom + 10),
+        targetX,
+        targetY,
+      });
+    };
 
-  const targetCX = padX + tPos.col * cellW + cellW / 2;
-  const targetCY = padY + tPos.row * cellH + cellH / 2;
+    updateRoute();
+    const resizeObserver = new ResizeObserver(updateRoute);
+    resizeObserver.observe(map);
+    resizeObserver.observe(target);
+    window.addEventListener("resize", updateRoute);
 
-  // Simple L-shaped path: entrance → col of target (bottom) → target
-  const midY = entranceY - 20;
-  const pathD = `M ${entranceX} ${entranceY} L ${entranceX} ${midY} L ${targetCX} ${midY} L ${targetCX} ${targetCY}`;
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", updateRoute);
+    };
+  }, [parkingStatus, targetSlot, slots.length]);
+
+  const pathD = route
+    ? `M ${route.entranceX} ${route.entranceY} L ${route.entranceX} ${route.approachY} L ${route.targetX} ${route.approachY} L ${route.targetX} ${route.targetY}`
+    : "";
 
   return (
     <div className="relative w-full overflow-hidden rounded-2xl bg-gray-50 border border-gray-200" style={{ userSelect: "none" }}>
       <div className="text-xs font-bold text-gray-400 uppercase tracking-widest px-4 pt-3 pb-2">Lot A — Ground Floor</div>
-      <div className="relative" style={{ height: svgH }}>
+      <div ref={mapRef} className="relative pb-16">
         {/* Slot grid */}
-        <div className="absolute inset-0 grid grid-cols-4 gap-2.5 px-4 pb-10" style={{ paddingTop: padY }}>
-          {slots.map((slot, idx) => {
+        <div className="relative z-10 grid grid-cols-4 gap-2.5 px-4 pt-2">
+          {slots.map((slot) => {
             const isTarget = slot.name === targetSlot;
             return (
               <div
                 key={slot.id}
+                ref={(element) => {
+                  if (element) slotElements.current.set(slot.name, element);
+                  else slotElements.current.delete(slot.name);
+                }}
+                data-slot-name={slot.name}
                 className={`rounded-2xl flex flex-col items-center justify-center gap-1 border-2 transition-all ${
                   isTarget
-                    ? "bg-blue-600 border-blue-700 text-white shadow-xl scale-105"
+                    ? isParked
+                      ? "bg-blue-600 border-blue-700 text-white shadow-xl scale-105"
+                      : "bg-orange-500 border-orange-600 text-white shadow-xl scale-105"
                     : `slot-${toUiSlotStatus(slot.display_status)}`
-                }`}
-                style={{ height: cellH - 8 }}
+                } min-h-20 sm:min-h-24`}
               >
-                {isTarget ? (
+                {isTarget && isParked ? (
                   <div className="w-6 h-6">{Icon.car}</div>
                 ) : (
                   <div className="w-5 h-5 opacity-60">{Icon.parking}</div>
                 )}
                 <span className="font-black text-sm" style={{ fontFamily: "'Outfit',sans-serif" }}>{slot.name}</span>
-                {isTarget && <span className="text-xs font-bold text-blue-100">YOUR CAR</span>}
+                {isTarget && (
+                  <span className="text-[10px] font-bold sm:text-xs">
+                    {isParked ? "YOUR CAR" : "RESERVED"}
+                  </span>
+                )}
               </div>
             );
           })}
         </div>
 
-        {/* SVG route overlay */}
-        <svg
-          width={svgW}
-          height={svgH}
-          className="absolute inset-0 h-full w-full pointer-events-none"
-          viewBox={`0 0 ${svgW} ${svgH}`}
-        >
-          {/* Dashed walking path */}
-          <path
-            d={pathD}
-            fill="none"
-            stroke="#2563eb"
-            strokeWidth="3"
-            strokeDasharray="8 5"
-            strokeLinecap="round"
-            className="path-animate"
-            style={{ opacity: 0.8 }}
-          />
-          {/* Directional arrow at target */}
-          <circle cx={targetCX} cy={targetCY} r="6" fill="#2563eb" opacity="0.3" />
-
-          {/* Entrance marker */}
-          <g transform={`translate(${entranceX}, ${entranceY})`}>
-            <circle r="10" fill="#22c55e" />
-            <text textAnchor="middle" dominantBaseline="central" fill="white" fontSize="10" fontWeight="900">▲</text>
-          </g>
-          <text x={entranceX} y={entranceY + 18} textAnchor="middle" fontSize="9" fill="#16a34a" fontWeight="700">ENTRANCE</text>
-        </svg>
+        {route && (
+          <svg
+            width={route.width}
+            height={route.height}
+            className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+            viewBox={`0 0 ${route.width} ${route.height}`}
+            aria-hidden="true"
+          >
+            <path
+              key={targetSlot}
+              data-route-target={targetSlot}
+              d={pathD}
+              fill="none"
+              stroke={routeColor}
+              strokeWidth="3"
+              strokeDasharray="8 5"
+              strokeLinecap="round"
+              className="path-animate"
+              style={{ opacity: 0.85 }}
+            />
+            <circle
+              data-route-end={targetSlot}
+              cx={route.targetX}
+              cy={route.targetY}
+              r="7"
+              fill={routeColor}
+              opacity="0.35"
+            />
+            <g transform={`translate(${route.entranceX}, ${route.entranceY})`}>
+              <circle r="10" fill="#22c55e" />
+              <text textAnchor="middle" dominantBaseline="central" fill="white" fontSize="10" fontWeight="900">▲</text>
+            </g>
+            <text x={route.entranceX} y={route.entranceY + 18} textAnchor="middle" fontSize="9" fill="#16a34a" fontWeight="700">ENTRANCE</text>
+          </svg>
+        )}
       </div>
     </div>
   );
 }
 
-function CarLocatedScreen({ navigate, slots }: { navigate: (s: Screen) => void; slots: ParkingSlot[] }) {
-  const vehicle = "KL07AB1234";
-  const slot = "P5";
+function CarLocatedScreen({
+  navigate,
+  slots,
+  location,
+}: {
+  navigate: (s: Screen) => void;
+  slots: ParkingSlot[];
+  location: VehicleLocation;
+}) {
+  const liveTargetSlot = slots.find((slot) => slot.id === location.slot_id);
+  const targetSlotName = liveTargetSlot?.name ?? location.slot_name;
+  const isParked = location.parking_status === "PARKED";
+  const statusLabel = isParked ? "Parked" : "Reserved — not parked";
+
   return (
     <AppShell>
-      <TopBar title="Vehicle Located" onBack={() => navigate("find-car")} />
+      <TopBar title={isParked ? "Vehicle Located" : "Reservation Located"} onBack={() => navigate("find-car")} />
       <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-4 py-6 sm:px-8 fade-in">
-        <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex gap-3 items-center">
-          <div className="w-10 h-10 bg-green-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow">
-            <div className="w-5 h-5 text-white">{Icon.check}</div>
+        <div className={`${isParked ? "border-green-200 bg-green-50" : "border-orange-200 bg-orange-50"} flex items-center gap-3 rounded-2xl border p-4`}>
+          <div className={`${isParked ? "bg-green-500" : "bg-orange-500"} flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl shadow`}>
+            <div className="h-5 w-5 text-white">{isParked ? Icon.check : Icon.parking}</div>
           </div>
           <div>
-            <div className="font-black text-green-800" style={{ fontFamily: "'Outfit',sans-serif" }}>Vehicle Found!</div>
-            <div className="text-green-600 text-xs font-medium">Your vehicle is parked at <strong>{slot}</strong></div>
+            <div className={`${isParked ? "text-green-800" : "text-orange-800"} font-black`} style={{ fontFamily: "'Outfit',sans-serif" }}>
+              {isParked ? "Vehicle Found!" : "Reservation Found"}
+            </div>
+            {isParked ? (
+              <div className="text-xs font-medium text-green-600">Your vehicle is parked at <strong>{targetSlotName}</strong></div>
+            ) : (
+              <div className="text-xs font-medium text-orange-700">
+                <div>Your vehicle has not been detected as parked yet.</div>
+                <div className="mt-0.5"><strong>Reserved Slot: {targetSlotName}</strong></div>
+              </div>
+            )}
           </div>
         </div>
 
-        <ParkingMapWithRoute targetSlot={slot} slots={slots} />
+        {liveTargetSlot ? (
+          <ParkingMapWithRoute
+            targetSlot={liveTargetSlot.name}
+            slots={slots}
+            parkingStatus={location.parking_status}
+          />
+        ) : (
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-700" role="status">
+            Refreshing the live parking layout…
+          </div>
+        )}
 
         {/* Legend */}
         <div className="flex gap-3 text-xs font-semibold">
@@ -959,16 +1107,16 @@ function CarLocatedScreen({ navigate, slots }: { navigate: (s: Screen) => void; 
             <span className="text-gray-600">Walking Route</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded-sm bg-blue-600" />
-            <span className="text-gray-600">Your Car</span>
+            <div className={`h-3 w-3 rounded-sm ${isParked ? "bg-blue-600" : "bg-orange-500"}`} />
+            <span className="text-gray-600">{isParked ? "Your Car" : "Reserved Slot"}</span>
           </div>
         </div>
 
         <div className="bg-white rounded-3xl shadow border border-gray-100 overflow-hidden">
-          {[["Vehicle", vehicle], ["Parking Slot", slot], ["Status", "Parked"]].map(([k, v], i, arr) => (
+          {[["Vehicle", location.vehicle_number], [isParked ? "Parking Slot" : "Reserved Slot", targetSlotName], ["Status", statusLabel]].map(([k, v], i, arr) => (
             <div key={k} className={`flex justify-between px-5 py-3.5 ${i < arr.length - 1 ? "border-b border-gray-100" : ""}`}>
               <span className="text-gray-500 text-sm font-semibold">{k}</span>
-              <span className={`font-black text-sm ${k === "Status" ? "text-green-600" : "text-gray-800"}`} style={{ fontFamily: "'Outfit',sans-serif" }}>{v}</span>
+              <span className={`font-black text-sm ${k === "Status" ? isParked ? "text-green-600" : "text-orange-600" : "text-gray-800"}`} style={{ fontFamily: "'Outfit',sans-serif" }}>{v}</span>
             </div>
           ))}
         </div>
@@ -979,7 +1127,7 @@ function CarLocatedScreen({ navigate, slots }: { navigate: (s: Screen) => void; 
           style={{ fontFamily: "'Outfit',sans-serif" }}
         >
           <div className="w-5 h-5">{Icon.navigation}</div>
-          Start Navigation
+          Back to Home
         </button>
       </div>
     </AppShell>
@@ -993,6 +1141,8 @@ export default function App() {
   const [vehicle, setVehicle] = useState("KL07AB1234");
   const [selectedSlot, setSelectedSlot] = useState("");
   const [reservation, setReservation] = useState<ActiveReservation | null>(null);
+  const [findVehicleNumber, setFindVehicleNumber] = useState("");
+  const [vehicleLocation, setVehicleLocation] = useState<VehicleLocation | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [slots, setSlots] = useState<ParkingSlot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1112,9 +1262,29 @@ export default function App() {
         <HomeScreen navigate={navigate} {...liveSlots} />
       );
     case "find-car":
-      return <FindCarScreen navigate={navigate} />;
+      return (
+        <FindCarScreen
+          navigate={navigate}
+          vehicleNumber={findVehicleNumber}
+          setVehicleNumber={setFindVehicleNumber}
+          setVehicleLocation={setVehicleLocation}
+        />
+      );
     case "car-located":
-      return <CarLocatedScreen navigate={navigate} slots={slots} />;
+      return vehicleLocation ? (
+        <CarLocatedScreen
+          navigate={navigate}
+          slots={slots}
+          location={vehicleLocation}
+        />
+      ) : (
+        <FindCarScreen
+          navigate={navigate}
+          vehicleNumber={findVehicleNumber}
+          setVehicleNumber={setFindVehicleNumber}
+          setVehicleLocation={setVehicleLocation}
+        />
+      );
     default:
       return <HomeScreen navigate={navigate} {...liveSlots} />;
   }
