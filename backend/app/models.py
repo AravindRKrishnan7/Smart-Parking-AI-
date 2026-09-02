@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, Enum as SqlEnum, Integer, String
+from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -20,6 +20,14 @@ class ReservationStatus(str, Enum):
 class OccupancySource(str, Enum):
     CAMERA = "CAMERA"
     SENSOR = "SENSOR"
+
+
+class ReservationLifecycleStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    IN_USE = "IN_USE"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
 
 
 def utc_now() -> datetime:
@@ -64,3 +72,33 @@ class ParkingSlot(Base):
             return "RESERVED"
         return "AVAILABLE"
 
+
+class Reservation(Base):
+    __tablename__ = "reservations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slot_id: Mapped[int] = mapped_column(
+        ForeignKey("parking_slots.id"),
+        index=True,
+        nullable=False,
+    )
+    phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    vehicle_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[ReservationLifecycleStatus] = mapped_column(
+        SqlEnum(
+            ReservationLifecycleStatus,
+            native_enum=False,
+            create_constraint=True,
+        ),
+        default=ReservationLifecycleStatus.ACTIVE,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
