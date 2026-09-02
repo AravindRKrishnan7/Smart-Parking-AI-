@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from .database import Base, SessionLocal, engine
 from .models import OccupancySource, ParkingSlot, PhysicalStatus, ReservationStatus
@@ -10,10 +10,10 @@ DEMO_SLOTS = [
     ("P2", OccupancySource.CAMERA),
     ("P3", OccupancySource.CAMERA),
     ("P4", OccupancySource.CAMERA),
-    ("P5", OccupancySource.SENSOR),
-    ("P6", OccupancySource.SENSOR),
-    ("P7", OccupancySource.SENSOR),
-    ("P8", OccupancySource.SENSOR),
+    ("P5", OccupancySource.CAMERA),
+    ("P6", OccupancySource.CAMERA),
+    ("P7", OccupancySource.CAMERA),
+    ("P8", OccupancySource.CAMERA),
 ]
 
 
@@ -24,7 +24,20 @@ def initialize_database() -> None:
         existing_names = set(db.scalars(select(ParkingSlot.name)).all())
 
         for name, configured_source in DEMO_SLOTS:
-            if name not in existing_names:
+            if name in existing_names:
+                db.execute(
+                    update(ParkingSlot)
+                    .where(
+                        ParkingSlot.name == name,
+                        ParkingSlot.configured_source != configured_source,
+                    )
+                    .values(
+                        configured_source=configured_source,
+                        # A source-ownership migration is not an occupancy event.
+                        updated_at=ParkingSlot.updated_at,
+                    )
+                )
+            else:
                 db.add(
                     ParkingSlot(
                         name=name,
@@ -39,4 +52,3 @@ def initialize_database() -> None:
 
 if __name__ == "__main__":
     initialize_database()
-
