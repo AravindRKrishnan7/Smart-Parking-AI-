@@ -91,15 +91,21 @@ def list_reservations(db: Session) -> list[Reservation]:
     return list(db.scalars(select(Reservation).order_by(Reservation.id.desc())).all())
 
 
+def _cancellation_conflict_detail(reservation: Reservation) -> str:
+    if reservation.status == ReservationLifecycleStatus.IN_USE:
+        return "Parking session is already in use and cannot be cancelled."
+    return (
+        f"Reservation {reservation.id} cannot be cancelled because its status "
+        f"is {reservation.status.value}."
+    )
+
+
 def cancel_reservation(db: Session, reservation_id: int) -> Reservation:
     reservation = get_reservation(db, reservation_id)
     if reservation.status != ReservationLifecycleStatus.ACTIVE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Reservation {reservation_id} cannot be cancelled because its status "
-                f"is {reservation.status.value}."
-            ),
+            detail=_cancellation_conflict_detail(reservation),
         )
 
     now = datetime.now(UTC)
@@ -117,10 +123,7 @@ def cancel_reservation(db: Session, reservation_id: int) -> Reservation:
         current = get_reservation(db, reservation_id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Reservation {reservation_id} cannot be cancelled because its status "
-                f"is {current.status.value}."
-            ),
+            detail=_cancellation_conflict_detail(current),
         )
 
     db.execute(
