@@ -908,6 +908,7 @@ interface RouteGeometry {
   approachY: number;
   targetX: number;
   targetY: number;
+  pathLength: number;
 }
 
 // The route is measured against the rendered grid, so its endpoint stays on
@@ -943,15 +944,20 @@ function ParkingMapWithRoute({
       const targetX = targetRect.left - mapRect.left + targetRect.width / 2;
       const targetY = targetRect.top - mapRect.top + targetRect.height / 2;
       const targetBottom = targetRect.bottom - mapRect.top;
+      const approachY = Math.min(entranceY - 24, targetBottom + 10);
 
       setRoute({
         width: mapRect.width,
         height: mapRect.height,
         entranceX,
         entranceY,
-        approachY: Math.min(entranceY - 24, targetBottom + 10),
+        approachY,
         targetX,
         targetY,
+        pathLength:
+          Math.abs(entranceY - approachY) +
+          Math.abs(entranceX - targetX) +
+          Math.abs(approachY - targetY),
       });
     };
 
@@ -1028,8 +1034,12 @@ function ParkingMapWithRoute({
               strokeWidth="3"
               strokeDasharray="8 5"
               strokeLinecap="round"
+              strokeLinejoin="round"
               className="path-animate"
-              style={{ opacity: 0.85 }}
+              style={{
+                opacity: 0.85,
+                "--route-length": `${route.pathLength}px`,
+              } as React.CSSProperties}
             />
             <circle
               data-route-end={targetSlot}

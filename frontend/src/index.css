@@ -86,8 +86,18 @@ input:focus-visible {
 }
 
 @keyframes path-dash {
-  from { stroke-dashoffset: 200; }
-  to { stroke-dashoffset: 0; }
+  0% {
+    stroke-dasharray: var(--route-length) var(--route-length);
+    stroke-dashoffset: var(--route-length);
+  }
+  99% {
+    stroke-dasharray: var(--route-length) var(--route-length);
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dasharray: 8 5;
+    stroke-dashoffset: 0;
+  }
 }
 
 .fade-in { animation: fadeIn 0.35s ease forwards; }
@@ -100,7 +110,6 @@ input:focus-visible {
 .slot-selected  { background: #dbeafe; border: 2px solid #2563eb; color: #1d4ed8; box-shadow: 0 0 0 3px rgba(37,99,235,0.25); }
 
 .path-animate {
-  stroke-dasharray: 200;
   animation: path-dash 1.5s ease forwards;
 }
 
