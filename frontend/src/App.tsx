@@ -24,6 +24,22 @@ import WhileIShop from "./WhileIShop";
 const DEV_TOOLS_ENABLED =
   String(import.meta.env.VITE_ENABLE_DEV_TOOLS).toLowerCase() === "true";
 
+// ParkingMapWithRoute places the entrance at the bottom center. The lower-row
+// center slots are therefore closest, followed by their outer neighbors and
+// then the upper row, with left-first ordering used to break equal distances.
+const RECOMMENDATION_PRIORITY = ["P6", "P7", "P5", "P8", "P2", "P3", "P1", "P4"];
+
+function recommendAvailableSlot(slots: ParkingSlot[]): ParkingSlot | null {
+  const availableByName = new Map(
+    slots
+      .filter((slot) => slot.display_status === "AVAILABLE")
+      .map((slot) => [slot.name, slot]),
+  );
+  return (
+    RECOMMENDATION_PRIORITY.map((name) => availableByName.get(name)).find(Boolean) ?? null
+  );
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Screen =
   | "home"
@@ -274,7 +290,10 @@ interface LiveSlotProps {
 
 // ─── Screens ──────────────────────────────────────────────────────────────────
 
-function HomeScreen({ navigate, slots, loading, error }: { navigate: (s: Screen) => void } & LiveSlotProps) {
+function HomeScreen({ navigate, onReserveRecommended, slots, loading, error }: {
+  navigate: (s: Screen) => void;
+  onReserveRecommended: (slotName: string) => void;
+} & LiveSlotProps) {
   const counts = useMemo(
     () => ({
       available: slots.filter((slot) => slot.display_status === "AVAILABLE").length,
@@ -282,6 +301,10 @@ function HomeScreen({ navigate, slots, loading, error }: { navigate: (s: Screen)
       reserved: slots.filter((slot) => slot.display_status === "RESERVED").length,
     }),
     [slots],
+  );
+  const recommendedSlot = useMemo(
+    () => (!loading && !error ? recommendAvailableSlot(slots) : null),
+    [error, loading, slots],
   );
 
   return (
@@ -299,6 +322,56 @@ function HomeScreen({ navigate, slots, loading, error }: { navigate: (s: Screen)
         {/* Cards */}
         <div className="mx-auto -mt-6 flex w-full max-w-4xl flex-1 flex-col gap-5 px-4 pb-8 sm:px-8 fade-in">
           <ConnectionNotice loading={loading} error={error} />
+
+          <section
+            className="rounded-3xl border border-blue-200 bg-gradient-to-r from-blue-50 to-cyan-50 p-4 shadow-lg sm:p-5"
+            aria-live="polite"
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-xs font-black uppercase tracking-widest text-blue-700">
+                Recommended Parking
+              </div>
+              {!loading && !error && (
+                <span className="rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-black tracking-wider text-green-700">
+                  LIVE
+                </span>
+              )}
+            </div>
+
+            {loading ? (
+              <p className="text-sm font-semibold text-blue-700">Checking live availability…</p>
+            ) : error ? (
+              <p className="text-sm font-semibold text-red-600">
+                Recommendation temporarily unavailable while the parking server reconnects.
+              </p>
+            ) : recommendedSlot ? (
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-xl font-black text-white shadow-md">
+                    {recommendedSlot.name}
+                  </div>
+                  <div>
+                    <div className="font-black text-gray-900" style={{ fontFamily: "'Outfit',sans-serif" }}>
+                      Closest currently available space
+                    </div>
+                    <div className="mt-0.5 text-xs font-semibold text-gray-500">Based on the live parking layout</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onReserveRecommended(recommendedSlot.name)}
+                  className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white shadow transition hover:bg-blue-700 active:scale-95 sm:ml-auto sm:flex-shrink-0"
+                >
+                  Reserve {recommendedSlot.name}
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm font-bold text-gray-700">
+                No parking spaces currently available
+              </p>
+            )}
+          </section>
+
           <div className="grid gap-4 md:grid-cols-3">
           <button
             onClick={() => navigate("phone")}
@@ -1250,12 +1323,22 @@ export default function App() {
     setNotice(message);
     setScreen("availability");
   };
+  const reserveRecommendedSlot = (slotName: string) => {
+    setSelectedSlot(slotName);
+    navigate("phone");
+  };
   const liveSlots = { slots, loading, error };
 
   const renderScreen = () => {
     switch (screen) {
     case "home":
-      return <HomeScreen navigate={navigate} {...liveSlots} />;
+      return (
+        <HomeScreen
+          navigate={navigate}
+          onReserveRecommended={reserveRecommendedSlot}
+          {...liveSlots}
+        />
+      );
     case "phone":
       return <PhoneScreen navigate={navigate} phone={phone} setPhone={setPhone} />;
     case "otp":
@@ -1296,7 +1379,11 @@ export default function App() {
           onCancelled={handleCancellation}
         />
       ) : (
-        <HomeScreen navigate={navigate} {...liveSlots} />
+        <HomeScreen
+          navigate={navigate}
+          onReserveRecommended={reserveRecommendedSlot}
+          {...liveSlots}
+        />
       );
     case "find-car":
       return (
@@ -1330,7 +1417,13 @@ export default function App() {
         </AppShell>
       );
       default:
-        return <HomeScreen navigate={navigate} {...liveSlots} />;
+        return (
+          <HomeScreen
+            navigate={navigate}
+            onReserveRecommended={reserveRecommendedSlot}
+            {...liveSlots}
+          />
+        );
     }
   };
 
