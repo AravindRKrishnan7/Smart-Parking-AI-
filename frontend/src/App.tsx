@@ -29,6 +29,38 @@ const DEV_TOOLS_ENABLED =
 // then the upper row, with left-first ordering used to break equal distances.
 const RECOMMENDATION_PRIORITY = ["P6", "P7", "P5", "P8", "P2", "P3", "P1", "P4"];
 
+const PARKING_EXITS = {
+  EXIT_A: {
+    name: "Exit A",
+    direction: "City / North Exit",
+    description: "Best for Ernakulam, Kochi, Kalamassery, Thrissur and northbound travel",
+    mapX: 0.1,
+  },
+  EXIT_B: {
+    name: "Exit B",
+    direction: "South Exit",
+    description: "Best for Alappuzha, Kottayam and southbound travel",
+    mapX: 0.9,
+  },
+} as const;
+
+type ParkingExitId = keyof typeof PARKING_EXITS;
+
+const DESTINATION_EXIT_MAPPING = [
+  { destination: "Ernakulam", exitId: "EXIT_A" },
+  { destination: "Kochi", exitId: "EXIT_A" },
+  { destination: "Kalamassery", exitId: "EXIT_A" },
+  { destination: "Thrissur", exitId: "EXIT_A" },
+  { destination: "Alappuzha", exitId: "EXIT_B" },
+  { destination: "Kottayam", exitId: "EXIT_B" },
+] as const;
+
+type DemoDestination = (typeof DESTINATION_EXIT_MAPPING)[number]["destination"];
+
+function exitForDestination(destination: DemoDestination): ParkingExitId {
+  return DESTINATION_EXIT_MAPPING.find((item) => item.destination === destination)!.exitId;
+}
+
 function recommendAvailableSlot(slots: ParkingSlot[]): ParkingSlot | null {
   const availableByName = new Map(
     slots
@@ -981,6 +1013,13 @@ function FindCarScreen({
           {locating ? "Locating..." : "Locate Vehicle →"}
         </PrimaryBtn>
 
+        <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+          <div className="text-sm font-black text-violet-800">Planning your exit?</div>
+          <p className="mt-1 text-xs font-semibold text-violet-700">
+            Locate your parked vehicle first to unlock Smart Exit Guidance.
+          </p>
+        </div>
+
         <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200">
           <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Recent Searches</div>
           {["KL07AB1234", "MH12XY9876"].map(v => (
@@ -1003,25 +1042,30 @@ interface RouteGeometry {
   approachY: number;
   targetX: number;
   targetY: number;
+  exitAX: number;
+  exitBX: number;
+  exitLaneX: number;
+  exitApproachY: number;
   pathLength: number;
 }
 
-// The route is measured against the rendered grid, so its endpoint stays on
-// the target slot as the responsive layout changes size.
+// The same measured SVG route supports entrance-to-slot location guidance and
+// slot-to-exit guidance, so both remain aligned as the layout resizes.
 function ParkingMapWithRoute({
   targetSlot,
   slots,
   parkingStatus,
+  exitTarget,
 }: {
   targetSlot: string;
   slots: ParkingSlot[];
   parkingStatus: VehicleLocation["parking_status"];
+  exitTarget?: ParkingExitId | null;
 }) {
   const mapRef = useRef<HTMLDivElement | null>(null);
   const slotElements = useRef(new Map<string, HTMLDivElement>());
   const [route, setRoute] = useState<RouteGeometry | null>(null);
   const isParked = parkingStatus === "PARKED";
-  const routeColor = isParked ? "#2563eb" : "#f97316";
 
   useLayoutEffect(() => {
     const map = mapRef.current;
@@ -1040,6 +1084,11 @@ function ParkingMapWithRoute({
       const targetY = targetRect.top - mapRect.top + targetRect.height / 2;
       const targetBottom = targetRect.bottom - mapRect.top;
       const approachY = Math.min(entranceY - 24, targetBottom + 10);
+      const exitAX = mapRect.width * PARKING_EXITS.EXIT_A.mapX;
+      const exitBX = mapRect.width * PARKING_EXITS.EXIT_B.mapX;
+      const exitX = exitTarget === "EXIT_A" ? exitAX : exitBX;
+      const exitLaneX = exitTarget === "EXIT_A" ? 6 : mapRect.width - 6;
+      const exitApproachY = entranceY - 18;
 
       setRoute({
         width: mapRect.width,
@@ -1049,10 +1098,19 @@ function ParkingMapWithRoute({
         approachY,
         targetX,
         targetY,
-        pathLength:
-          Math.abs(entranceY - approachY) +
-          Math.abs(entranceX - targetX) +
-          Math.abs(approachY - targetY),
+        exitAX,
+        exitBX,
+        exitLaneX,
+        exitApproachY,
+        pathLength: exitTarget
+          ? Math.abs(targetY - approachY) +
+            Math.abs(targetX - exitLaneX) +
+            Math.abs(approachY - exitApproachY) +
+            Math.abs(exitLaneX - exitX) +
+            Math.abs(exitApproachY - entranceY)
+          : Math.abs(entranceY - approachY) +
+            Math.abs(entranceX - targetX) +
+            Math.abs(approachY - targetY),
       });
     };
 
@@ -1066,11 +1124,20 @@ function ParkingMapWithRoute({
       resizeObserver.disconnect();
       window.removeEventListener("resize", updateRoute);
     };
-  }, [parkingStatus, targetSlot, slots.length]);
+  }, [exitTarget, parkingStatus, targetSlot, slots.length]);
+
+  const exitX = route && exitTarget
+    ? exitTarget === "EXIT_A" ? route.exitAX : route.exitBX
+    : null;
 
   const pathD = route
-    ? `M ${route.entranceX} ${route.entranceY} L ${route.entranceX} ${route.approachY} L ${route.targetX} ${route.approachY} L ${route.targetX} ${route.targetY}`
+    ? exitX === null
+      ? `M ${route.entranceX} ${route.entranceY} L ${route.entranceX} ${route.approachY} L ${route.targetX} ${route.approachY} L ${route.targetX} ${route.targetY}`
+      : `M ${route.targetX} ${route.targetY} L ${route.targetX} ${route.approachY} L ${route.exitLaneX} ${route.approachY} L ${route.exitLaneX} ${route.exitApproachY} L ${exitX} ${route.exitApproachY} L ${exitX} ${route.entranceY}`
     : "";
+  const routeColor = exitTarget ? "#7c3aed" : isParked ? "#2563eb" : "#f97316";
+  const routeEndX = exitX ?? route?.targetX ?? 0;
+  const routeEndY = exitTarget ? route?.entranceY ?? 0 : route?.targetY ?? 0;
 
   return (
     <div className="relative w-full overflow-hidden rounded-2xl bg-gray-50 border border-gray-200" style={{ userSelect: "none" }}>
@@ -1121,8 +1188,9 @@ function ParkingMapWithRoute({
             aria-hidden="true"
           >
             <path
-              key={targetSlot}
-              data-route-target={targetSlot}
+              key={`${targetSlot}-${exitTarget ?? "location"}`}
+              data-route-start={exitTarget ? targetSlot : "ENTRANCE"}
+              data-route-end={exitTarget ?? targetSlot}
               d={pathD}
               fill="none"
               stroke={routeColor}
@@ -1137,9 +1205,8 @@ function ParkingMapWithRoute({
               } as React.CSSProperties}
             />
             <circle
-              data-route-end={targetSlot}
-              cx={route.targetX}
-              cy={route.targetY}
+              cx={routeEndX}
+              cy={routeEndY}
               r="7"
               fill={routeColor}
               opacity="0.35"
@@ -1149,6 +1216,28 @@ function ParkingMapWithRoute({
               <text textAnchor="middle" dominantBaseline="central" fill="white" fontSize="10" fontWeight="900">▲</text>
             </g>
             <text x={route.entranceX} y={route.entranceY + 18} textAnchor="middle" fontSize="9" fill="#16a34a" fontWeight="700">ENTRANCE</text>
+            {(Object.keys(PARKING_EXITS) as ParkingExitId[]).map((exitId) => {
+              const parkingExit = PARKING_EXITS[exitId];
+              const x = exitId === "EXIT_A" ? route.exitAX : route.exitBX;
+              const active = exitTarget === exitId;
+              return (
+                <g key={exitId} data-exit-marker={exitId} transform={`translate(${x}, ${route.entranceY})`}>
+                  <rect
+                    x="-27"
+                    y="-11"
+                    width="54"
+                    height="22"
+                    rx="7"
+                    fill={active ? "#7c3aed" : "#64748b"}
+                    stroke="white"
+                    strokeWidth="2"
+                  />
+                  <text textAnchor="middle" dominantBaseline="central" fill="white" fontSize="9" fontWeight="900">
+                    {parkingExit.name.toUpperCase()}
+                  </text>
+                </g>
+              );
+            })}
           </svg>
         )}
       </div>
@@ -1169,6 +1258,26 @@ function CarLocatedScreen({
   const targetSlotName = liveTargetSlot?.name ?? location.slot_name;
   const isParked = location.parking_status === "PARKED";
   const statusLabel = isParked ? "Parked" : "Reserved — not parked";
+  const [destination, setDestination] = useState<DemoDestination | "">("");
+  const [guidedDestination, setGuidedDestination] = useState<DemoDestination | "">("");
+  const [showExitRoute, setShowExitRoute] = useState(false);
+  const recommendedExitId = guidedDestination
+    ? exitForDestination(guidedDestination)
+    : null;
+  const recommendedExit = recommendedExitId
+    ? PARKING_EXITS[recommendedExitId]
+    : null;
+
+  const changeDestination = (nextDestination: DemoDestination | "") => {
+    setDestination(nextDestination);
+    if (guidedDestination) setGuidedDestination(nextDestination);
+  };
+
+  const findBestExit = () => {
+    if (!destination) return;
+    setGuidedDestination(destination);
+    setShowExitRoute(false);
+  };
 
   return (
     <AppShell>
@@ -1193,11 +1302,86 @@ function CarLocatedScreen({
           </div>
         </div>
 
+        {isParked ? (
+          <section
+            className="rounded-3xl border border-violet-200 bg-gradient-to-r from-violet-50 to-blue-50 p-4 shadow-sm sm:p-5"
+            aria-labelledby="exit-guidance-title"
+          >
+            <div className="mb-4">
+              <div className="text-xs font-black uppercase tracking-widest text-violet-700">Heading out?</div>
+              <h2 id="exit-guidance-title" className="mt-1 text-lg font-black text-gray-900" style={{ fontFamily: "'Outfit',sans-serif" }}>
+                Smart Exit Guidance
+              </h2>
+              <p className="mt-1 text-xs font-semibold text-gray-600">
+                Choose your direction and SmartPark will suggest the matching facility exit.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="flex flex-1 flex-col gap-1.5 text-sm font-bold text-gray-700" htmlFor="exit-destination">
+                Where are you heading?
+                <select
+                  id="exit-destination"
+                  value={destination}
+                  onChange={(event) => changeDestination(event.target.value as DemoDestination | "")}
+                  className="w-full rounded-xl border-2 border-violet-200 bg-white px-4 py-3 text-base font-bold text-gray-800 focus:border-violet-500 focus:outline-none"
+                >
+                  <option value="">Select destination</option>
+                  {DESTINATION_EXIT_MAPPING.map(({ destination: option }) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={findBestExit}
+                disabled={!destination}
+                className="rounded-xl bg-violet-600 px-5 py-3.5 text-sm font-black text-white shadow transition hover:bg-violet-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-shrink-0"
+              >
+                Find Best Exit
+              </button>
+            </div>
+
+            {recommendedExit && guidedDestination && (
+              <div className="mt-4 rounded-2xl border border-violet-200 bg-white p-4" role="status">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-14 min-w-16 items-center justify-center rounded-2xl bg-violet-600 px-3 text-center text-sm font-black text-white shadow">
+                      {recommendedExit.name}
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-violet-600">Recommended Exit</div>
+                      <div className="font-black text-gray-900" style={{ fontFamily: "'Outfit',sans-serif" }}>{recommendedExit.direction}</div>
+                      <div className="text-xs font-semibold text-gray-600">Best exit for travel towards {guidedDestination}.</div>
+                      <div className="mt-1 text-[11px] font-medium text-gray-500">{recommendedExit.description}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowExitRoute(true)}
+                    className="rounded-xl border-2 border-violet-600 px-4 py-2.5 text-sm font-black text-violet-700 transition hover:bg-violet-50 sm:ml-auto sm:flex-shrink-0"
+                  >
+                    {showExitRoute ? "Exit Route Shown" : "Show Exit Route"}
+                  </button>
+                </div>
+                <p className="mt-3 border-t border-violet-100 pt-3 text-[11px] font-semibold text-gray-500">
+                  Exit recommendations use the parking facility's configured road-direction mapping, not live traffic data.
+                </p>
+              </div>
+            )}
+          </section>
+        ) : (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 text-sm font-semibold text-violet-700">
+            Smart Exit Guidance becomes available after your vehicle is detected as parked.
+          </div>
+        )}
+
         {liveTargetSlot ? (
           <ParkingMapWithRoute
             targetSlot={liveTargetSlot.name}
             slots={slots}
             parkingStatus={location.parking_status}
+            exitTarget={showExitRoute ? recommendedExitId : null}
           />
         ) : (
           <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-700" role="status">
@@ -1206,18 +1390,22 @@ function CarLocatedScreen({
         )}
 
         {/* Legend */}
-        <div className="flex gap-3 text-xs font-semibold">
+        <div className="flex flex-wrap gap-3 text-xs font-semibold">
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-3 rounded-full bg-green-500" />
             <span className="text-gray-600">Entrance</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-4 h-1 bg-blue-500 rounded" style={{ borderTop: "2px dashed #2563eb", background: "none" }} />
-            <span className="text-gray-600">Walking Route</span>
+            <div className="w-4 h-1 rounded" style={{ borderTop: `2px dashed ${showExitRoute ? "#7c3aed" : "#2563eb"}`, background: "none" }} />
+            <span className="text-gray-600">{showExitRoute ? "Exit Route" : "Walking Route"}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <div className={`h-3 w-3 rounded-sm ${isParked ? "bg-blue-600" : "bg-orange-500"}`} />
             <span className="text-gray-600">{isParked ? "Your Car" : "Reserved Slot"}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="h-3 w-5 rounded bg-slate-500" />
+            <span className="text-gray-600">Facility Exits</span>
           </div>
         </div>
 
